@@ -39,7 +39,8 @@ def parse_sumup_timestamp(timestamp_str):
 
 @app.route('/')
 def index():
-    return "SumUp Analytics Backend is Running"
+    """Restored: Serves the frontend template"""
+    return render_template('index.html')
 
 @app.route('/api/merchant', methods=['GET'])
 def get_merchant():
