@@ -1,16 +1,15 @@
-from flask import Flask, render_template, jsonify, request, session
+from flask import Flask, render_template, jsonify, request
 from flask_cors import CORS
 import requests
 from datetime import datetime, timedelta
 import os
-from functools import wraps
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
 CORS(app)
 
-# SumUp API Configuration - NOW FROM ENVIRONMENT
-SUMUP_API_KEY = os.environ.get('SUMUP_API_KEY', 'sup_sk_52CNh7PDSNJ89veOhooqGNmIJP0wvzyHe')
+# SumUp API Configuration - FROM ENVIRONMENT
+SUMUP_API_KEY = os.getenv('SUMUP_API_KEY')
 SUMUP_BASE_URL = "https://api.sumup.com/v0.1"
 
 def get_sumup_headers():
@@ -41,14 +40,12 @@ def get_merchant():
 def get_transactions():
     """Get transaction history with optional filters"""
     try:
-        # Get query parameters
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
-        limit = request.args.get('limit', 1000)
+        limit = request.args.get('limit', 100)
         
         params = {
-            "limit": limit,
-            "order": "descending"
+            "limit": limit
         }
         
         if start_date:
@@ -57,7 +54,7 @@ def get_transactions():
             params['newest_time'] = f"{end_date}T23:59:59Z"
         
         response = requests.get(
-            f"{SUMUP_BASE_URL}/me/transactions/history",
+            f"{SUMUP_BASE_URL}/me/transactions",
             headers=get_sumup_headers(),
             params=params
         )
@@ -73,7 +70,6 @@ def get_transactions():
 def get_summary():
     """Get summary analytics"""
     try:
-        # Get last 30 days
         end_date = datetime.now()
         start_date = end_date - timedelta(days=30)
         
@@ -84,7 +80,7 @@ def get_summary():
         }
         
         response = requests.get(
-            f"{SUMUP_BASE_URL}/me/transactions/history",
+            f"{SUMUP_BASE_URL}/me/transactions",
             headers=get_sumup_headers(),
             params=params
         )
@@ -93,19 +89,19 @@ def get_summary():
         transactions = response.json().get('items', [])
         
         # Calculate summary stats
-        total_revenue = sum(txn['amount'] for txn in transactions if txn['status'] == 'SUCCESSFUL')
-        total_transactions = len([txn for txn in transactions if txn['status'] == 'SUCCESSFUL'])
+        total_revenue = sum(txn['amount'] for txn in transactions if txn.get('status') == 'SUCCESSFUL')
+        total_transactions = len([txn for txn in transactions if txn.get('status') == 'SUCCESSFUL'])
         avg_transaction = total_revenue / total_transactions if total_transactions > 0 else 0
         
         # Failed transactions
-        failed_count = len([txn for txn in transactions if txn['status'] == 'FAILED'])
+        failed_count = len([txn for txn in transactions if txn.get('status') == 'FAILED'])
         
         # Payment types breakdown
         payment_types = {}
         for txn in transactions:
-            if txn['status'] == 'SUCCESSFUL':
+            if txn.get('status') == 'SUCCESSFUL':
                 ptype = txn.get('payment_type', 'UNKNOWN')
-                payment_types[ptype] = payment_types.get(ptype, 0) + txn['amount']
+                payment_types[ptype] = payment_types.get(ptype, 0) + txn.get('amount', 0)
         
         return jsonify({
             "total_revenue": total_revenue,
@@ -135,7 +131,7 @@ def get_daily_analytics():
         }
         
         response = requests.get(
-            f"{SUMUP_BASE_URL}/me/transactions/history",
+            f"{SUMUP_BASE_URL}/me/transactions",
             headers=get_sumup_headers(),
             params=params
         )
@@ -146,15 +142,17 @@ def get_daily_analytics():
         # Group by day
         daily_data = {}
         for txn in transactions:
-            if txn['status'] == 'SUCCESSFUL':
-                date = txn['timestamp'][:10]  # Get YYYY-MM-DD
-                if date not in daily_data:
-                    daily_data[date] = {
-                        'revenue': 0,
-                        'count': 0
-                    }
-                daily_data[date]['revenue'] += txn['amount']
-                daily_data[date]['count'] += 1
+            if txn.get('status') == 'SUCCESSFUL':
+                timestamp = txn.get('timestamp', '')
+                date = timestamp[:10] if timestamp else ''
+                if date:
+                    if date not in daily_data:
+                        daily_data[date] = {
+                            'revenue': 0,
+                            'count': 0
+                        }
+                    daily_data[date]['revenue'] += txn.get('amount', 0)
+                    daily_data[date]['count'] += 1
         
         # Sort by date
         sorted_data = [
@@ -187,7 +185,7 @@ def get_hourly_analytics():
         }
         
         response = requests.get(
-            f"{SUMUP_BASE_URL}/me/transactions/history",
+            f"{SUMUP_BASE_URL}/me/transactions",
             headers=get_sumup_headers(),
             params=params
         )
@@ -199,10 +197,16 @@ def get_hourly_analytics():
         hourly_data = {str(i): {'revenue': 0, 'count': 0} for i in range(24)}
         
         for txn in transactions:
-            if txn['status'] == 'SUCCESSFUL':
-                hour = datetime.fromisoformat(txn['timestamp'].replace('Z', '+00:00')).hour
-                hourly_data[str(hour)]['revenue'] += txn['amount']
-                hourly_data[str(hour)]['count'] += 1
+            if txn.get('status') == 'SUCCESSFUL':
+                timestamp = txn.get('timestamp', '')
+                if timestamp:
+                    try:
+                        dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                        hour = str(dt.hour)
+                        hourly_data[hour]['revenue'] += txn.get('amount', 0)
+                        hourly_data[hour]['count'] += 1
+                    except:
+                        pass
         
         sorted_data = [
             {
@@ -234,7 +238,7 @@ def get_card_types():
         }
         
         response = requests.get(
-            f"{SUMUP_BASE_URL}/me/transactions/history",
+            f"{SUMUP_BASE_URL}/me/transactions",
             headers=get_sumup_headers(),
             params=params
         )
@@ -244,7 +248,7 @@ def get_card_types():
         
         card_types = {}
         for txn in transactions:
-            if txn['status'] == 'SUCCESSFUL':
+            if txn.get('status') == 'SUCCESSFUL':
                 card_type = txn.get('card_type', 'UNKNOWN')
                 if card_type not in card_types:
                     card_types[card_type] = {
@@ -252,12 +256,21 @@ def get_card_types():
                         'revenue': 0
                     }
                 card_types[card_type]['count'] += 1
-                card_types[card_type]['revenue'] += txn['amount']
+                card_types[card_type]['revenue'] += txn.get('amount', 0)
         
         return jsonify(card_types)
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@app.route('/api/debug', methods=['GET'])
+def debug():
+    """Debug endpoint to check configuration"""
+    return jsonify({
+        "api_key_set": bool(SUMUP_API_KEY),
+        "api_key_prefix": SUMUP_API_KEY[:15] + "..." if SUMUP_API_KEY else "NOT SET",
+        "base_url": SUMUP_BASE_URL
+    })
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
