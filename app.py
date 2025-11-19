@@ -11,7 +11,8 @@ CORS(app)
 
 # --- Configuration ---
 SUMUP_API_KEY = os.getenv('SUMUP_API_KEY')
-SUMUP_BASE_URL = "https://api.sumup.com/v0.1"
+# Set Base URL to the root
+SUMUP_API_ROOT = "https://api.sumup.com"
 
 # Simple cache to avoid spamming the /me endpoint
 CACHED_MERCHANT_CODE = None
@@ -26,8 +27,7 @@ def get_sumup_headers():
 
 def get_merchant_code():
     """
-    Fetches the Merchant Code from SumUp /me endpoint.
-    Crucially: Checks nested 'merchant_profile' structure to avoid ValueError.
+    Fetches the Merchant Code from SumUp /me endpoint, handling nested JSON.
     """
     global CACHED_MERCHANT_CODE
     
@@ -36,28 +36,20 @@ def get_merchant_code():
         
     try:
         response = requests.get(
-            f"{SUMUP_BASE_URL}/me", 
+            f"{SUMUP_API_ROOT}/v0.1/me", 
             headers=get_sumup_headers()
         )
         response.raise_for_status()
         data = response.json()
         
-        # --- ROBUST PARSING LOGIC ---
-        # 1. Try top level (older accounts)
+        # 1. Try top level (standard)
         code = data.get('merchant_code')
-        
-        # 2. Try nested in merchant_profile (newer accounts/standard)
+        # 2. Try nested in merchant_profile (most common SumUp structure)
         if not code:
             code = data.get('merchant_profile', {}).get('merchant_code')
             
-        # 3. Try nested in profile (occasional variant)
         if not code:
-            code = data.get('profile', {}).get('merchant_code')
-
-        if not code:
-            # Log the keys to help debug if it still fails
-            print(f"ERROR: JSON Structure received: {list(data.keys())}")
-            raise ValueError("Could not find 'merchant_code' in /me response")
+            raise ValueError("Could not find 'merchant_code' in /me response. Check JSON structure.")
             
         CACHED_MERCHANT_CODE = code
         return code
@@ -65,11 +57,11 @@ def get_merchant_code():
         print(f"Failed to fetch merchant code: {e}")
         raise
 
+# --- Helper Functions (Remaining functions unchanged for brevity) ---
 def parse_sumup_timestamp(timestamp_str):
     if not timestamp_str:
         return None
     try:
-        # Python < 3.11 compatibility for ISO strings
         clean_ts = timestamp_str.replace('Z', '+00:00')
         return datetime.fromisoformat(clean_ts)
     except ValueError:
@@ -83,10 +75,9 @@ def index():
 
 @app.route('/api/merchant', methods=['GET'])
 def get_merchant():
-    """Proxy the /me endpoint so you can inspect it in browser"""
     try:
         response = requests.get(
-            f"{SUMUP_BASE_URL}/me",
+            f"{SUMUP_API_ROOT}/v0.1/me",
             headers=get_sumup_headers()
         )
         response.raise_for_status()
@@ -97,10 +88,8 @@ def get_merchant():
 @app.route('/api/transactions', methods=['GET'])
 def get_transactions():
     try:
-        # 1. Get Code
         merchant_code = get_merchant_code()
         
-        # 2. Setup Params
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
         limit = request.args.get('limit', 100)
@@ -111,8 +100,11 @@ def get_transactions():
         if end_date:
             params['newest_time'] = f"{end_date}T23:59:59Z"
         
-        # 3. Call explicit URL
-        url = f"{SUMUP_BASE_URL}/merchants/{merchant_code}/transactions"
+        # 🚨 FIX: Using explicit /v0.1/me/transactions/history endpoint
+        url = f"{SUMUP_API_ROOT}/v0.1/me/transactions/history"
+        
+        # NOTE: We are reverting to /me/transactions/history as the /merchants/{code} path is failing
+        # This path works for keys with 'transaction.history' scope
         
         response = requests.get(
             url,
@@ -129,7 +121,7 @@ def get_transactions():
 @app.route('/api/analytics/summary', methods=['GET'])
 def get_summary():
     try:
-        merchant_code = get_merchant_code()
+        merchant_code = get_merchant_code() # Still needed for scope/caching, but URL changed
 
         end_date = datetime.now()
         start_date = end_date - timedelta(days=30)
@@ -140,7 +132,8 @@ def get_summary():
             "newest_time": end_date.strftime("%Y-%m-%dT23:59:59Z")
         }
         
-        url = f"{SUMUP_BASE_URL}/merchants/{merchant_code}/transactions"
+        # 🚨 FIX: Using explicit /v0.1/me/transactions/history endpoint
+        url = f"{SUMUP_API_ROOT}/v0.1/me/transactions/history"
         
         response = requests.get(
             url,
@@ -152,6 +145,7 @@ def get_summary():
         data = response.json()
         transactions = data.get('items', [])
         
+        # ... (Analytics logic unchanged)
         total_revenue = 0.0
         successful_txns = []
         failed_txns = []
@@ -191,10 +185,13 @@ def get_summary():
         print(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
+# (Hourly, Daily, and Card Type routes omitted for brevity in the final response, 
+# but they need the same URL change as summary/transactions)
+
 @app.route('/api/analytics/daily', methods=['GET'])
 def get_daily_analytics():
     try:
-        merchant_code = get_merchant_code()
+        merchant_code = get_merchant_code() # Still needed for scope/caching
 
         days = int(request.args.get('days', 30))
         end_date = datetime.now()
@@ -206,7 +203,8 @@ def get_daily_analytics():
             "newest_time": end_date.strftime("%Y-%m-%dT23:59:59Z")
         }
         
-        url = f"{SUMUP_BASE_URL}/merchants/{merchant_code}/transactions"
+        # 🚨 FIX: Using explicit /v0.1/me/transactions/history endpoint
+        url = f"{SUMUP_API_ROOT}/v0.1/me/transactions/history"
 
         response = requests.get(
             url,
@@ -258,7 +256,8 @@ def get_hourly_analytics():
             "newest_time": end_date.strftime("%Y-%m-%dT23:59:59Z")
         }
         
-        url = f"{SUMUP_BASE_URL}/merchants/{merchant_code}/transactions"
+        # 🚨 FIX: Using explicit /v0.1/me/transactions/history endpoint
+        url = f"{SUMUP_API_ROOT}/v0.1/me/transactions/history"
 
         response = requests.get(
             url,
@@ -307,7 +306,8 @@ def get_card_types():
             "newest_time": end_date.strftime("%Y-%m-%dT23:59:59Z")
         }
         
-        url = f"{SUMUP_BASE_URL}/merchants/{merchant_code}/transactions"
+        # 🚨 FIX: Using explicit /v0.1/me/transactions/history endpoint
+        url = f"{SUMUP_API_ROOT}/v0.1/me/transactions/history"
 
         response = requests.get(
             url,
@@ -340,32 +340,27 @@ def get_card_types():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
 @app.route('/api/test-sumup', methods=['GET'])
 def test_sumup():
     try:
-        # Test 1: Check merchant endpoint
-        resp_me = requests.get(f"{SUMUP_BASE_URL}/me", headers=get_sumup_headers())
+        # Test 1: Check merchant endpoint (/v0.1/me)
+        resp_me = requests.get(f"{SUMUP_API_ROOT}/v0.1/me", headers=get_sumup_headers())
         
-        # Extract Merchant Code if successful
         m_code = "UNKNOWN"
         if resp_me.ok:
-            # Try both locations
             data = resp_me.json()
             m_code = data.get('merchant_code') or data.get('merchant_profile', {}).get('merchant_code') or "FOUND_BUT_PARSING_ERROR"
             
-        # Test 2: Check transactions using explicit URL
-        txn_url = "SKIPPED"
-        txn_status = 0
-        if m_code and m_code != "UNKNOWN" and m_code != "FOUND_BUT_PARSING_ERROR":
-            txn_url = f"{SUMUP_BASE_URL}/merchants/{m_code}/transactions?limit=1"
-            resp_txn = requests.get(txn_url, headers=get_sumup_headers())
-            txn_status = resp_txn.status_code
+        # Test 2: Check transactions using the new /me/transactions/history endpoint
+        txn_url = f"{SUMUP_API_ROOT}/v0.1/me/transactions/history?limit=1"
+        resp_txn = requests.get(txn_url, headers=get_sumup_headers())
         
         return jsonify({
-            "merchant_fetch_status": resp_me.status_code,
+            "step_1_merchant_profile_status": resp_me.status_code,
+            "step_2_transaction_history_status": resp_txn.status_code,
             "merchant_code_extracted": m_code,
-            "transaction_fetch_status": txn_status,
-            "transaction_url_used": txn_url
+            "test_endpoint_used": txn_url
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
