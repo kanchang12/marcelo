@@ -627,7 +627,7 @@
             });
         });
 
-        // --- Core Functions (No Changes) ---
+        // --- Core Functions ---
 
         function initNavigation() {
             const navButtons = document.querySelectorAll('.nav-btn');
@@ -644,7 +644,6 @@
                     const view = btn.dataset.view;
                     document.getElementById(`${view}-section`).classList.add('active');
                     
-                    // Re-render charts when switching to the pinned charts view
                     if (view === 'charts') {
                         loadPinnedCharts(); 
                     }
@@ -660,7 +659,6 @@
             document.getElementById('start-date').value = thirtyDaysAgo;
             
             document.getElementById('apply-filter').addEventListener('click', () => {
-                // In a real application, you would pass these dates to the backend API calls
                 loadDashboardData(); 
                 initTransactions();
                 showNotification('Filter applied (Note: Backend date filtering must be implemented in app.py)', 'info');
@@ -713,19 +711,25 @@
                 
             } catch (error) {
                 console.error('Error loading dashboard data:', error);
-                // Fallback for blank data
                 showNotification('Error loading analytics data. Check app.py status filters.', 'error');
             }
         }
 
-        // --- Chart Specific Loaders (No Changes) ---
+        // --- Chart Specific Loaders (Includes data checks) ---
 
         async function loadDailyRevenue() {
             try {
-                // Assumes backend provides a list of {date: "YYYY-MM-DD", revenue: X}
                 const response = await fetch('/api/analytics/daily?days=30');
                 const data = await response.json();
                 
+                // CRITICAL CHECK: Ensure data is valid before mapping
+                if (!Array.isArray(data) || data.length === 0) {
+                     console.warn("Daily revenue data is empty or invalid array. Chart skipped.");
+                     destroyChart('dailyRevenue');
+                     document.getElementById('daily-revenue-chart').parentNode.innerHTML = '<h3>Daily Revenue</h3><p style="color:var(--error-color); text-align:center;">No data available.</p>';
+                     return; 
+                }
+
                 currentData.daily = data;
                 
                 const ctx = document.getElementById('daily-revenue-chart');
@@ -750,11 +754,19 @@
 
         async function loadPaymentTypes() {
             try {
-                // Re-fetch summary to ensure payment_types are current
                 const response = await fetch('/api/analytics/summary');
-                const data = await response.json();
+                const summaryData = await response.json();
                 
-                const paymentTypes = data.payment_types || {};
+                const paymentTypes = summaryData.payment_types || {};
+                
+                // CRITICAL CHECK: Ensure data is valid before mapping
+                if (Object.keys(paymentTypes).length === 0) {
+                     console.warn("Payment types data is empty or invalid. Chart skipped.");
+                     destroyChart('paymentTypes');
+                     document.getElementById('payment-types-chart').parentNode.innerHTML = '<h3>Payment Types</h3><p style="color:var(--error-color); text-align:center;">No data available.</p>';
+                     return; 
+                }
+
                 const ctx = document.getElementById('payment-types-chart');
                 destroyChart('paymentTypes');
                 
@@ -771,11 +783,10 @@
             }
         }
 
-        // --- Chart Builder/Pinning Logic (No Changes) ---
+        // --- Chart Builder/Pinning Logic ---
 
         function initOverviewPinning() {
             document.querySelectorAll('.btn-pin').forEach(btn => {
-                // Remove previous listeners to prevent duplicates
                 btn.removeEventListener('click', handleOverviewPin);
                 btn.addEventListener('click', handleOverviewPin);
             });
@@ -786,26 +797,13 @@
             const chartKey = btn.dataset.chart;
             const chartTitle = btn.dataset.title;
 
-            // Define the configuration for the default chart
             let chartConfig;
             switch (chartKey) {
                 case 'daily-revenue':
-                    chartConfig = {
-                        title: chartTitle,
-                        type: 'line',
-                        dataSource: 'daily',
-                        period: 30,
-                        colorScheme: 'blue'
-                    };
+                    chartConfig = { title: chartTitle, type: 'line', dataSource: 'daily', period: 30, colorScheme: 'blue' };
                     break;
                 case 'payment-types':
-                    chartConfig = {
-                        title: chartTitle,
-                        type: 'doughnut',
-                        dataSource: 'payment-types',
-                        period: 30,
-                        colorScheme: 'rainbow'
-                    };
+                    chartConfig = { title: chartTitle, type: 'doughnut', dataSource: 'payment-types', period: 30, colorScheme: 'rainbow' };
                     break;
                 default:
                     return;
@@ -828,9 +826,21 @@
             
             const chartData = await getChartData(dataSource, period);
             
-            const ctx = document.getElementById('preview-chart');
+            const previewContainer = document.getElementById('preview-chart').parentNode;
             destroyChart('preview');
             
+            // CRITICAL CHECK: Do not draw if data is null
+            if (!chartData) {
+                 previewContainer.innerHTML = '<canvas id="preview-chart"></canvas><p style="color:var(--error-color); text-align:center;">Error: Failed to fetch valid data from API.</p>';
+                 return;
+            }
+
+            // Restore canvas element if it was replaced by an error message
+            if (!document.getElementById('preview-chart')) {
+                previewContainer.innerHTML = '<canvas id="preview-chart"></canvas>';
+            }
+
+            const ctx = document.getElementById('preview-chart');
             charts.preview = createCustomChart(ctx, type, title, chartData, colorScheme);
         }
 
@@ -863,7 +873,6 @@
             pinnedCharts.push(newConfig);
             localStorage.setItem('pinnedCharts', JSON.stringify(pinnedCharts));
             
-            // Switch to My Charts view to show the new chart
             loadPinnedCharts();
             document.querySelector('[data-view="charts"]').click();
             showNotification('Chart saved and pinned successfully', 'success');
@@ -873,7 +882,7 @@
         async function loadPinnedCharts() {
             const container = document.getElementById('pinned-charts-container');
             
-            // Destroy all existing charts in the pinnedCharts container to prevent duplicates
+            // Destroy all existing charts
             Object.keys(charts).filter(key => key.startsWith('pinned-')).forEach(key => destroyChart(key));
 
             if (pinnedCharts.length === 0) {
@@ -891,6 +900,7 @@
             for (const chartConfig of pinnedCharts) {
                 const chartDiv = document.createElement('div');
                 chartDiv.className = 'chart-container';
+                chartDiv.setAttribute('data-id', chartConfig.id); // Set ID for easy retrieval
                 chartDiv.innerHTML = `
                     <div class="chart-header">
                         <h3>${chartConfig.title}</h3>
@@ -902,20 +912,29 @@
                 container.appendChild(chartDiv);
                 
                 // Load and render chart
-                try {
-                    const chartData = await getChartData(chartConfig.dataSource, chartConfig.period);
-                    const ctx = document.getElementById(`pinned-${chartConfig.id}`);
-                    
-                    // Store the Chart.js instance in the global 'charts' object
-                    charts[`pinned-${chartConfig.id}`] = createCustomChart(ctx, chartConfig.type, '', chartData, chartConfig.colorScheme);
-                } catch (e) {
-                    console.error('Failed to load pinned chart data:', e);
-                    // Display error on the chart canvas if data fails
-                    const ctx = document.getElementById(`pinned-${chartConfig.id}`);
-                    ctx.parentNode.innerHTML += '<p style="color:var(--error-color); text-align:center;">Error: Failed to fetch chart data from API.</p>';
+                const chartData = await getChartData(chartConfig.dataSource, chartConfig.period);
+                const ctx = document.getElementById(`pinned-${chartConfig.id}`);
+                
+                // CRITICAL CHECK: Do not draw if data is null (Prevents infinite loop)
+                if (!chartData) {
+                    // Replace the canvas with an error message in the chart container
+                    ctx.parentNode.innerHTML = `
+                        <div class="chart-header">
+                            <h3>${chartConfig.title}</h3>
+                            <button class="btn-pin pinned" data-id="${chartConfig.id}">🗑️ Remove</button>
+                        </div>
+                        <p style="color:var(--error-color); text-align:center; padding-top: 50px;">Error: API returned no data to draw this chart.</p>
+                    `;
+                    // Attach the remove listener again to the new button
+                    chartDiv.querySelector('.btn-pin').addEventListener('click', () => {
+                        removePinnedChart(chartConfig.id);
+                    });
+                    continue; 
                 }
 
-
+                // Draw the chart
+                charts[`pinned-${chartConfig.id}`] = createCustomChart(ctx, chartConfig.type, '', chartData, chartConfig.colorScheme);
+                
                 // Remove button listener
                 chartDiv.querySelector('.btn-pin').addEventListener('click', () => {
                     removePinnedChart(chartConfig.id);
@@ -934,7 +953,6 @@
         }
 
         function removePinnedChart(id) {
-            // Find and destroy the Chart.js instance first
             destroyChart(`pinned-${id}`);
 
             pinnedCharts = pinnedCharts.filter(chart => chart.id !== id);
@@ -943,66 +961,75 @@
             showNotification('Chart removed', 'success');
         }
 
-        // --- Data Fetching and Mapping (Mock Data Fallback Removed) ---
+        // --- Data Fetching and Mapping (CRITICALLY REVISED FOR SAFE EXITS) ---
 
-        // Helper function to fetch data from the backend
         async function getChartData(dataSource, period) {
             let response;
             
-            switch (dataSource) {
-                case 'daily':
-                case 'transaction-count': // Both can use the daily endpoint
-                    response = await fetch(`/api/analytics/daily?days=${period}`);
-                    const dailyData = await response.json();
-                    
-                    if (!dailyData || dailyData.length === 0) {
-                         throw new Error(`No data returned for ${dataSource}`);
-                    }
-                    
-                    return {
-                        labels: dailyData.map(d => d.date),
-                        datasets: [{
-                            label: dataSource === 'daily' ? 'Revenue' : 'Transactions',
-                            data: dailyData.map(d => dataSource === 'daily' ? d.revenue : d.count)
-                        }]
-                    };
-                    
-                case 'payment-types':
-                    response = await fetch('/api/analytics/summary');
-                    const summaryData = await response.json();
-                    const paymentTypes = summaryData.payment_types || {};
+            try {
+                switch (dataSource) {
+                    case 'daily':
+                    case 'transaction-count':
+                        response = await fetch(`/api/analytics/daily?days=${period}`);
+                        const dailyData = await response.json();
+                        
+                        if (!Array.isArray(dailyData) || dailyData.length === 0) {
+                             console.warn(`[Chart Data Warning] API returned no daily data for ${dataSource}`);
+                             return null; // SAFE EXIT
+                        }
+                        
+                        return {
+                            labels: dailyData.map(d => d.date),
+                            datasets: [{
+                                label: dataSource === 'daily' ? 'Revenue' : 'Transactions',
+                                data: dailyData.map(d => dataSource === 'daily' ? d.revenue : d.count)
+                            }]
+                        };
+                        
+                    case 'payment-types':
+                        response = await fetch('/api/analytics/summary');
+                        const summaryData = await response.json();
+                        const paymentTypes = summaryData.payment_types || {};
 
-                    if (Object.keys(paymentTypes).length === 0) {
-                         throw new Error('No payment types data found');
-                    }
-                    
-                    return {
-                        labels: Object.keys(paymentTypes),
-                        datasets: [{
-                            data: Object.values(paymentTypes)
-                        }]
-                    };
-                    
-                case 'card-types':
-                    response = await fetch(`/api/analytics/card-types?days=${period}`);
-                    const cardData = await response.json();
+                        if (Object.keys(paymentTypes).length === 0) {
+                             console.warn('API returned no payment types data found');
+                             return null; // SAFE EXIT
+                        }
+                        
+                        return {
+                            labels: Object.keys(paymentTypes),
+                            datasets: [{
+                                data: Object.values(paymentTypes)
+                            }]
+                        };
+                        
+                    case 'card-types':
+                        response = await fetch(`/api/analytics/card-types?days=${period}`);
+                        const cardData = await response.json();
 
-                    if (!cardData || Object.keys(cardData).length === 0) {
-                         throw new Error('No card types data found');
-                    }
-                    
-                    return {
-                        labels: Object.keys(cardData || {}),
-                        datasets: [{
-                            data: Object.keys(cardData || {}).map(key => cardData[key].count)
-                        }]
-                    };
-                default:
-                    throw new Error(`Unknown data source: ${dataSource}`);
+                        if (!cardData || Object.keys(cardData).length === 0) {
+                             console.warn('API returned no card types data found');
+                             return null; // SAFE EXIT
+                        }
+                        
+                        return {
+                            labels: Object.keys(cardData || {}),
+                            datasets: [{
+                                data: Object.keys(cardData || {}).map(key => cardData[key].count)
+                            }]
+                        };
+                    default:
+                        console.error(`Unknown data source: ${dataSource}`);
+                        return null; // SAFE EXIT
+                }
+            } catch (error) {
+                // Catches network errors or failed JSON parsing
+                console.error(`CRITICAL: Error fetching chart data for ${dataSource}:`, error);
+                return null; // CRITICAL SAFE EXIT
             }
         }
 
-        // --- Chart Rendering Utility (No Changes) ---
+        // --- Chart Rendering Utility ---
 
         function destroyChart(chartKey) {
             if (charts[chartKey]) {
@@ -1012,7 +1039,6 @@
         }
 
         function createChart(ctx, type, data, title) {
-            // General chart creation used by Overview
             return new Chart(ctx, {
                 type: type,
                 data: data,
@@ -1020,26 +1046,15 @@
                     responsive: true,
                     maintainAspectRatio: false,
                     plugins: {
-                        legend: {
-                            display: true,
-                            position: type === 'doughnut' ? 'bottom' : 'top'
-                        },
-                        title: {
-                            display: true,
-                            text: title
-                        }
+                        legend: { display: true, position: type === 'doughnut' ? 'bottom' : 'top' },
+                        title: { display: true, text: title }
                     },
-                    scales: type !== 'pie' && type !== 'doughnut' ? {
-                        y: {
-                            beginAtZero: true
-                        }
-                    } : {}
+                    scales: type !== 'pie' && type !== 'doughnut' ? { y: { beginAtZero: true } } : {}
                 }
             });
         }
 
         function createCustomChart(ctx, type, title, data, colorScheme) {
-            // Chart creation used by Builder/Pinned Charts
             const colors = colorSchemes[colorScheme];
             
             return new Chart(ctx, {
@@ -1050,7 +1065,7 @@
                         ...dataset,
                         backgroundColor: (type === 'line' || type === 'bar') ? colors[0] : colors,
                         borderColor: colors[0],
-                        fill: type === 'line' ? 'start' : false, // For line charts
+                        fill: type === 'line' ? 'start' : false,
                         tension: 0.4
                     }))
                 },
@@ -1058,26 +1073,16 @@
                     responsive: true,
                     maintainAspectRatio: false,
                     plugins: {
-                        legend: {
-                            display: true,
-                            position: 'bottom'
-                        },
-                        title: {
-                            display: title !== '', // Only display title if provided
-                            text: title
-                        }
+                        legend: { display: true, position: 'bottom' },
+                        title: { display: title !== '', text: title }
                     },
-                    scales: type !== 'pie' && type !== 'doughnut' ? {
-                        y: {
-                            beginAtZero: true
-                        }
-                    } : {}
+                    scales: type !== 'pie' && type !== 'doughnut' ? { y: { beginAtZero: true } } : {}
                 }
             });
         }
 
 
-        // --- Transactions and CSV Export (No Changes) ---
+        // --- Transactions and CSV Export ---
 
         async function initTransactions() {
             try {
@@ -1092,7 +1097,6 @@
                     return;
                 }
                 
-                // Sort by date (most recent first)
                 const sortedTransactions = data.items.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
                 sortedTransactions.forEach(txn => {
@@ -1110,7 +1114,6 @@
                     tbody.appendChild(row);
                 });
                 
-                // Export CSV
                 document.getElementById('export-csv-btn').addEventListener('click', () => {
                     exportToCSV(sortedTransactions);
                 });
@@ -1128,7 +1131,7 @@
                 return [
                     date.toLocaleDateString(),
                     date.toLocaleTimeString(),
-                    (txn.amount / 100).toFixed(2), // Convert from cents/pence to currency
+                    (txn.amount / 100).toFixed(2),
                     txn.status,
                     txn.payment_type || 'N/A',
                     txn.card_type || 'N/A',
@@ -1138,7 +1141,7 @@
             
             let csvContent = headers.join(',') + '\n';
             rows.forEach(row => {
-                csvContent += row.map(e => `"${e}"`).join(',') + '\n'; // Quote fields for safety
+                csvContent += row.map(e => `"${e}"`).join(',') + '\n';
             });
             
             const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -1152,12 +1155,11 @@
         }
 
 
-        // --- Utilities (No Changes) ---
+        // --- Utilities ---
 
         function showNotification(message, type) {
-            // Basic notification using alert. Can be replaced with a stylish toast notification.
             console.log(`[${type.toUpperCase()}] ${message}`);
-            // alert(message); 
+            // In a production environment, you would use a dedicated UI notification system here.
         }
 
     </script>
