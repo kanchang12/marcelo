@@ -1,4 +1,4 @@
-from flask import Flask, render_template_string, jsonify, request, session
+from flask import Flask, render_template_string, jsonify, request, session, render_template
 from flask_cors import CORS
 import requests
 from datetime import datetime, timedelta
@@ -10,11 +10,9 @@ CORS(app)
 
 GOODTILL_API_ROOT = "https://api.thegoodtill.com/api"
 
-# Serve the HTML
 @app.route('/')
 def index():
-    with open('index.html', 'r') as f:
-        return render_template_string(f.read())
+    return render_template('index.html')
 
 # Login - Get JWT from GoodTill
 @app.route('/api/login', methods=['POST'])
