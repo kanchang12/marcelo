@@ -85,12 +85,23 @@ async function loadDashboardData() {
     try {
         // Load summary
         const summaryResponse = await fetch('/api/analytics/summary');
+        
+        if (!summaryResponse.ok) {
+            throw new Error(`API returned ${summaryResponse.status}`);
+        }
+        
         const summary = await summaryResponse.json();
         
-        document.getElementById('total-revenue').textContent = `£${summary.total_revenue.toFixed(2)}`;
-        document.getElementById('total-transactions').textContent = summary.total_transactions;
-        document.getElementById('avg-transaction').textContent = `£${summary.avg_transaction.toFixed(2)}`;
-        document.getElementById('failed-transactions').textContent = summary.failed_transactions;
+        // Check if we got an error response
+        if (summary.error) {
+            throw new Error(summary.error);
+        }
+        
+        // Update with safe defaults
+        document.getElementById('total-revenue').textContent = `£${(summary.total_revenue || 0).toFixed(2)}`;
+        document.getElementById('total-transactions').textContent = summary.total_transactions || 0;
+        document.getElementById('avg-transaction').textContent = `£${(summary.avg_transaction || 0).toFixed(2)}`;
+        document.getElementById('failed-transactions').textContent = summary.failed_transactions || 0;
         
         // Store for chart builder
         currentData.summary = summary;
@@ -105,7 +116,11 @@ async function loadDashboardData() {
         
     } catch (error) {
         console.error('Error loading dashboard data:', error);
-        showNotification('Error loading data', 'error');
+        document.getElementById('total-revenue').textContent = '£0.00';
+        document.getElementById('total-transactions').textContent = '0';
+        document.getElementById('avg-transaction').textContent = '£0.00';
+        document.getElementById('failed-transactions').textContent = '0';
+        alert('Error loading data: ' + error.message);
     }
 }
 
@@ -566,5 +581,4 @@ function hexToRgb(hex) {
 function showNotification(message, type) {
     // Simple notification - you can enhance this with a proper notification system
     alert(message);
-                                                            }
-  
+}
