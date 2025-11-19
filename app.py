@@ -13,7 +13,7 @@ CORS(app)
 SUMUP_API_KEY = os.getenv('SUMUP_API_KEY')
 SUMUP_BASE_URL = "https://api.sumup.com/v0.1"
 
-# Simple cache for the merchant code so we don't fetch it every single request
+# Simple cache to avoid spamming the /me endpoint
 CACHED_MERCHANT_CODE = None
 
 def get_sumup_headers():
@@ -27,7 +27,7 @@ def get_sumup_headers():
 def get_merchant_code():
     """
     Fetches the Merchant Code from SumUp /me endpoint.
-    Uses the cached value if available to save API calls.
+    Crucially: Checks nested 'merchant_profile' structure to avoid ValueError.
     """
     global CACHED_MERCHANT_CODE
     
@@ -35,7 +35,6 @@ def get_merchant_code():
         return CACHED_MERCHANT_CODE
         
     try:
-        # We know this endpoint works because your logs showed a 200 OK for it
         response = requests.get(
             f"{SUMUP_BASE_URL}/me", 
             headers=get_sumup_headers()
@@ -43,10 +42,22 @@ def get_merchant_code():
         response.raise_for_status()
         data = response.json()
         
-        # Extract the code (e.g., "MH4H92C7")
+        # --- ROBUST PARSING LOGIC ---
+        # 1. Try top level (older accounts)
         code = data.get('merchant_code')
+        
+        # 2. Try nested in merchant_profile (newer accounts/standard)
         if not code:
-            raise ValueError("Could not find merchant_code in /me response")
+            code = data.get('merchant_profile', {}).get('merchant_code')
+            
+        # 3. Try nested in profile (occasional variant)
+        if not code:
+            code = data.get('profile', {}).get('merchant_code')
+
+        if not code:
+            # Log the keys to help debug if it still fails
+            print(f"ERROR: JSON Structure received: {list(data.keys())}")
+            raise ValueError("Could not find 'merchant_code' in /me response")
             
         CACHED_MERCHANT_CODE = code
         return code
@@ -54,11 +65,11 @@ def get_merchant_code():
         print(f"Failed to fetch merchant code: {e}")
         raise
 
-# --- Helper Functions ---
 def parse_sumup_timestamp(timestamp_str):
     if not timestamp_str:
         return None
     try:
+        # Python < 3.11 compatibility for ISO strings
         clean_ts = timestamp_str.replace('Z', '+00:00')
         return datetime.fromisoformat(clean_ts)
     except ValueError:
@@ -72,8 +83,8 @@ def index():
 
 @app.route('/api/merchant', methods=['GET'])
 def get_merchant():
+    """Proxy the /me endpoint so you can inspect it in browser"""
     try:
-        # We call the API directly here to get fresh data
         response = requests.get(
             f"{SUMUP_BASE_URL}/me",
             headers=get_sumup_headers()
@@ -86,21 +97,21 @@ def get_merchant():
 @app.route('/api/transactions', methods=['GET'])
 def get_transactions():
     try:
-        # 1. Get the Merchant Code first
+        # 1. Get Code
         merchant_code = get_merchant_code()
         
+        # 2. Setup Params
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
         limit = request.args.get('limit', 100)
         
         params = {"limit": limit}
-        
         if start_date:
             params['oldest_time'] = f"{start_date}T00:00:00Z"
         if end_date:
             params['newest_time'] = f"{end_date}T23:59:59Z"
         
-        # 2. Use the explicit URL structure
+        # 3. Call explicit URL
         url = f"{SUMUP_BASE_URL}/merchants/{merchant_code}/transactions"
         
         response = requests.get(
@@ -118,7 +129,6 @@ def get_transactions():
 @app.route('/api/analytics/summary', methods=['GET'])
 def get_summary():
     try:
-        # 1. Get the Merchant Code first
         merchant_code = get_merchant_code()
 
         end_date = datetime.now()
@@ -130,7 +140,6 @@ def get_summary():
             "newest_time": end_date.strftime("%Y-%m-%dT23:59:59Z")
         }
         
-        # 2. Use the explicit URL structure
         url = f"{SUMUP_BASE_URL}/merchants/{merchant_code}/transactions"
         
         response = requests.get(
@@ -185,7 +194,6 @@ def get_summary():
 @app.route('/api/analytics/daily', methods=['GET'])
 def get_daily_analytics():
     try:
-        # 1. Get the Merchant Code first
         merchant_code = get_merchant_code()
 
         days = int(request.args.get('days', 30))
@@ -198,7 +206,6 @@ def get_daily_analytics():
             "newest_time": end_date.strftime("%Y-%m-%dT23:59:59Z")
         }
         
-        # 2. Use the explicit URL structure
         url = f"{SUMUP_BASE_URL}/merchants/{merchant_code}/transactions"
 
         response = requests.get(
@@ -239,7 +246,6 @@ def get_daily_analytics():
 @app.route('/api/analytics/hourly', methods=['GET'])
 def get_hourly_analytics():
     try:
-        # 1. Get the Merchant Code first
         merchant_code = get_merchant_code()
 
         days = int(request.args.get('days', 7))
@@ -252,7 +258,6 @@ def get_hourly_analytics():
             "newest_time": end_date.strftime("%Y-%m-%dT23:59:59Z")
         }
         
-        # 2. Use the explicit URL structure
         url = f"{SUMUP_BASE_URL}/merchants/{merchant_code}/transactions"
 
         response = requests.get(
@@ -290,7 +295,6 @@ def get_hourly_analytics():
 @app.route('/api/analytics/card-types', methods=['GET'])
 def get_card_types():
     try:
-        # 1. Get the Merchant Code first
         merchant_code = get_merchant_code()
 
         days = int(request.args.get('days', 30))
@@ -303,7 +307,6 @@ def get_card_types():
             "newest_time": end_date.strftime("%Y-%m-%dT23:59:59Z")
         }
         
-        # 2. Use the explicit URL structure
         url = f"{SUMUP_BASE_URL}/merchants/{merchant_code}/transactions"
 
         response = requests.get(
@@ -346,16 +349,22 @@ def test_sumup():
         # Extract Merchant Code if successful
         m_code = "UNKNOWN"
         if resp_me.ok:
-            m_code = resp_me.json().get('merchant_code', 'UNKNOWN')
+            # Try both locations
+            data = resp_me.json()
+            m_code = data.get('merchant_code') or data.get('merchant_profile', {}).get('merchant_code') or "FOUND_BUT_PARSING_ERROR"
             
         # Test 2: Check transactions using explicit URL
-        txn_url = f"{SUMUP_BASE_URL}/merchants/{m_code}/transactions?limit=1"
-        resp_txn = requests.get(txn_url, headers=get_sumup_headers())
+        txn_url = "SKIPPED"
+        txn_status = 0
+        if m_code and m_code != "UNKNOWN" and m_code != "FOUND_BUT_PARSING_ERROR":
+            txn_url = f"{SUMUP_BASE_URL}/merchants/{m_code}/transactions?limit=1"
+            resp_txn = requests.get(txn_url, headers=get_sumup_headers())
+            txn_status = resp_txn.status_code
         
         return jsonify({
             "merchant_fetch_status": resp_me.status_code,
-            "merchant_code_found": m_code,
-            "transaction_fetch_status": resp_txn.status_code,
+            "merchant_code_extracted": m_code,
+            "transaction_fetch_status": txn_status,
             "transaction_url_used": txn_url
         })
     except Exception as e:
