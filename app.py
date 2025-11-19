@@ -8,8 +8,10 @@ app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
 CORS(app)
 
-# SumUp API Configuration - FROM ENVIRONMENT
+# SumUp API Configuration - FROM ENVIRONMENT ONLY
 SUMUP_API_KEY = os.getenv('SUMUP_API_KEY')
+if not SUMUP_API_KEY:
+    raise ValueError("SUMUP_API_KEY environment variable is required!")
 SUMUP_BASE_URL = "https://api.sumup.com/v0.1"
 
 def get_sumup_headers():
@@ -79,41 +81,70 @@ def get_summary():
             "newest_time": end_date.strftime("%Y-%m-%dT23:59:59Z")
         }
         
+        print(f"Fetching transactions with params: {params}")
+        
         response = requests.get(
             f"{SUMUP_BASE_URL}/me/transactions",
             headers=get_sumup_headers(),
             params=params
         )
+        
+        print(f"SumUp API Status: {response.status_code}")
+        print(f"SumUp API Response: {response.text[:500]}")
+        
         response.raise_for_status()
         
-        transactions = response.json().get('items', [])
+        data = response.json()
+        transactions = data.get('items', [])
+        
+        print(f"Got {len(transactions)} transactions")
         
         # Calculate summary stats
-        total_revenue = sum(txn['amount'] for txn in transactions if txn.get('status') == 'SUCCESSFUL')
-        total_transactions = len([txn for txn in transactions if txn.get('status') == 'SUCCESSFUL'])
-        avg_transaction = total_revenue / total_transactions if total_transactions > 0 else 0
+        total_revenue = 0
+        successful_txns = []
+        failed_txns = []
         
-        # Failed transactions
-        failed_count = len([txn for txn in transactions if txn.get('status') == 'FAILED'])
+        for txn in transactions:
+            status = txn.get('status', '')
+            if status == 'SUCCESSFUL':
+                successful_txns.append(txn)
+                total_revenue += txn.get('amount', 0)
+            elif status == 'FAILED':
+                failed_txns.append(txn)
+        
+        total_transactions = len(successful_txns)
+        avg_transaction = total_revenue / total_transactions if total_transactions > 0 else 0
+        failed_count = len(failed_txns)
         
         # Payment types breakdown
         payment_types = {}
-        for txn in transactions:
-            if txn.get('status') == 'SUCCESSFUL':
-                ptype = txn.get('payment_type', 'UNKNOWN')
-                payment_types[ptype] = payment_types.get(ptype, 0) + txn.get('amount', 0)
+        for txn in successful_txns:
+            ptype = txn.get('payment_type', 'UNKNOWN')
+            payment_types[ptype] = payment_types.get(ptype, 0) + txn.get('amount', 0)
         
-        return jsonify({
+        result = {
             "total_revenue": total_revenue,
             "total_transactions": total_transactions,
             "avg_transaction": avg_transaction,
             "failed_transactions": failed_count,
             "payment_types": payment_types,
             "period": "Last 30 days"
-        })
+        }
         
+        print(f"Returning summary: {result}")
+        
+        return jsonify(result)
+        
+    except requests.exceptions.HTTPError as e:
+        error_msg = f"SumUp API Error: {str(e)}, Response: {e.response.text if e.response else 'No response'}"
+        print(error_msg)
+        return jsonify({"error": error_msg}), 500
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        error_msg = f"Server Error: {str(e)}"
+        print(error_msg)
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": error_msg}), 500
 
 @app.route('/api/analytics/daily', methods=['GET'])
 def get_daily_analytics():
@@ -271,6 +302,39 @@ def debug():
         "api_key_prefix": SUMUP_API_KEY[:15] + "..." if SUMUP_API_KEY else "NOT SET",
         "base_url": SUMUP_BASE_URL
     })
+
+@app.route('/api/test-sumup', methods=['GET'])
+def test_sumup():
+    """Test SumUp API connection directly"""
+    try:
+        # Test 1: Check merchant endpoint
+        response = requests.get(
+            f"{SUMUP_BASE_URL}/me",
+            headers=get_sumup_headers()
+        )
+        merchant_status = response.status_code
+        merchant_data = response.json() if response.ok else response.text
+        
+        # Test 2: Check transactions endpoint
+        response2 = requests.get(
+            f"{SUMUP_BASE_URL}/me/transactions?limit=5",
+            headers=get_sumup_headers()
+        )
+        txn_status = response2.status_code
+        txn_data = response2.json() if response2.ok else response2.text
+        
+        return jsonify({
+            "merchant_endpoint": {
+                "status": merchant_status,
+                "data": merchant_data
+            },
+            "transactions_endpoint": {
+                "status": txn_status,
+                "data": txn_data
+            }
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
