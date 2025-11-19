@@ -4,16 +4,406 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SumUp Analytics Dashboard</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        /* --- CSS Styling (No Changes) --- */
+        :root {
+            --sidebar-width: 280px;
+            --primary-color: #3b82f6;
+            --secondary-color: #60a5fa;
+            --success-color: #10b981;
+            --error-color: #ef4444;
+            --bg-light: #f9fafb;
+            --bg-dark: #ffffff;
+            --border-color: #e5e7eb;
+            --text-dark: #1f2937;
+            --text-light: #6b7280;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-light);
+            color: var(--text-dark);
+        }
+
+        /* --- Layout --- */
+        .dashboard-container {
+            display: flex;
+            min-height: 100vh;
+        }
+
+        .sidebar {
+            width: var(--sidebar-width);
+            background-color: var(--bg-dark);
+            border-right: 1px solid var(--border-color);
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            position: sticky;
+            top: 0;
+            height: 100vh;
+        }
+
+        .main-content {
+            flex-grow: 1;
+            padding: 30px;
+        }
+
+        .content-section {
+            display: none;
+        }
+
+        .content-section.active {
+            display: block;
+        }
+
+        /* --- Sidebar Elements --- */
+        .sidebar-header {
+            margin-bottom: 30px;
+        }
+
+        .sidebar-header h1 {
+            font-size: 1.5rem;
+            color: var(--primary-color);
+            margin-bottom: 5px;
+        }
+
+        .sidebar-nav {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-bottom: 30px;
+        }
+
+        .nav-btn {
+            background: none;
+            border: none;
+            text-align: left;
+            padding: 12px 15px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: background-color 0.2s, color 0.2s;
+            border-radius: 8px;
+            color: var(--text-dark);
+        }
+
+        .nav-btn:hover {
+            background-color: var(--bg-light);
+        }
+
+        .nav-btn.active {
+            background-color: var(--primary-color);
+            color: white;
+            font-weight: 600;
+        }
+
+        .date-filter h3 {
+            font-size: 0.9rem;
+            margin-bottom: 10px;
+            color: var(--text-light);
+        }
+
+        .date-filter input,
+        .date-filter button {
+            width: 100%;
+            padding: 8px;
+            margin-bottom: 10px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+        }
+
+        .date-filter button {
+            background-color: var(--success-color);
+            color: white;
+            cursor: pointer;
+            font-weight: 500;
+            transition: background-color 0.2s;
+        }
+
+        .date-filter button:hover {
+            background-color: #059669;
+        }
+
+        /* --- Main Content Layout --- */
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 15px;
+        }
+
+        .header h2 {
+            font-size: 1.8rem;
+        }
+
+        /* --- Summary Cards --- */
+        .summary-cards {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 20px;
+            margin-bottom: 40px;
+        }
+
+        .card {
+            background-color: var(--bg-dark);
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+            display: flex;
+            align-items: center;
+        }
+
+        .card-icon {
+            font-size: 2rem;
+            margin-right: 15px;
+        }
+
+        .card-content h3 {
+            font-size: 0.9rem;
+            color: var(--text-light);
+            margin-bottom: 4px;
+        }
+
+        .card-value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            margin-bottom: 2px;
+        }
+
+        .card-label {
+            font-size: 0.75rem;
+            color: var(--text-light);
+        }
+
+        /* --- Charts Grid --- */
+        .charts-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        .chart-container {
+            background-color: var(--bg-dark);
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+            min-height: 350px;
+            position: relative;
+        }
+
+        .chart-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .chart-header h3 {
+            font-size: 1.1rem;
+        }
+
+        .btn-pin {
+            background: none;
+            border: 1px solid var(--border-color);
+            color: var(--text-light);
+            padding: 5px 10px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            font-size: 0.8rem;
+        }
+
+        .btn-pin:hover {
+            background-color: var(--bg-light);
+        }
+
+        .btn-pin.pinned {
+            background-color: var(--error-color);
+            color: white;
+            border-color: var(--error-color);
+        }
+
+        .btn-pin.pinned:hover {
+            background-color: #dc2626;
+        }
+
+        /* --- Button Styles --- */
+        .btn-refresh, .btn-secondary {
+            background-color: var(--primary-color);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: background-color 0.2s;
+        }
+
+        .btn-refresh:hover, .btn-secondary:hover {
+            background-color: #2563eb;
+        }
+
+        .btn-secondary {
+            background-color: var(--text-light);
+        }
+
+        .btn-secondary:hover {
+            background-color: #4b5563;
+        }
+
+        .btn-primary {
+            background-color: var(--primary-color);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 500;
+            border: none;
+        }
+
+        .btn-success {
+            background-color: var(--success-color);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 500;
+            border: none;
+        }
+
+        /* --- Chart Builder --- */
+        .builder-form {
+            background-color: var(--bg-dark);
+            padding: 20px;
+            border-radius: 12px;
+            margin-bottom: 30px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        .builder-form label {
+            display: block;
+            font-size: 0.85rem;
+            color: var(--text-light);
+            margin-bottom: 5px;
+        }
+
+        .builder-form input[type="text"],
+        .builder-form input[type="number"],
+        .builder-form select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+        }
+
+        .form-actions {
+            display: flex;
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .chart-preview {
+            margin-top: 30px;
+        }
+
+        .chart-preview h3 {
+            margin-bottom: 15px;
+            font-size: 1.3rem;
+        }
+        
+        /* --- Empty State --- */
+        .empty-state {
+            grid-column: 1 / -1;
+            text-align: center;
+            padding: 50px;
+            color: var(--text-light);
+            background-color: var(--bg-dark);
+            border: 2px dashed var(--border-color);
+            border-radius: 12px;
+        }
+
+        /* --- Transactions Table --- */
+        .transactions-table-container {
+            overflow-x: auto;
+            background-color: var(--bg-dark);
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+        }
+
+        .transactions-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9rem;
+        }
+
+        .transactions-table th,
+        .transactions-table td {
+            padding: 12px 15px;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .transactions-table th {
+            background-color: var(--bg-light);
+            color: var(--text-dark);
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 0.75rem;
+        }
+
+        .transactions-table tbody tr:hover {
+            background-color: var(--bg-light);
+        }
+
+        .status-badge {
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-weight: 600;
+            font-size: 0.7rem;
+            text-transform: uppercase;
+        }
+
+        .status-successful {
+            background-color: #d1fae5;
+            color: var(--success-color);
+        }
+
+        .status-failed, .status-canceled {
+            background-color: #fee2e2;
+            color: var(--error-color);
+        }
+
+        .loading {
+            text-align: center;
+            font-style: italic;
+            color: var(--text-light);
+        }
+    </style>
 </head>
 <body>
     <div class="dashboard-container">
-        <!-- Sidebar -->
         <aside class="sidebar">
             <div class="sidebar-header">
                 <h1>📊 SumUp Analytics</h1>
-                <p id="merchant-name">Loading...</p>
+                <p id="merchant-name" style="font-size: 0.9rem; color: var(--text-light);">Loading...</p>
             </div>
             
             <nav class="sidebar-nav">
@@ -31,16 +421,13 @@
             </div>
         </aside>
 
-        <!-- Main Content -->
         <main class="main-content">
-            <!-- Overview Section -->
             <section id="overview-section" class="content-section active">
                 <div class="header">
                     <h2>Dashboard Overview</h2>
                     <button id="refresh-btn" class="btn-refresh">🔄 Refresh</button>
                 </div>
 
-                <!-- Summary Cards -->
                 <div class="summary-cards">
                     <div class="card">
                         <div class="card-icon">💰</div>
@@ -79,12 +466,11 @@
                     </div>
                 </div>
 
-                <!-- Default Charts -->
                 <div class="charts-grid">
                     <div class="chart-container">
                         <div class="chart-header">
                             <h3>Daily Revenue</h3>
-                            <button class="btn-pin" data-chart="daily-revenue">📌 Pin</button>
+                            <button class="btn-pin" data-chart="daily-revenue" data-title="Daily Revenue Trend">📌 Pin</button>
                         </div>
                         <canvas id="daily-revenue-chart"></canvas>
                     </div>
@@ -92,34 +478,17 @@
                     <div class="chart-container">
                         <div class="chart-header">
                             <h3>Payment Types</h3>
-                            <button class="btn-pin" data-chart="payment-types">📌 Pin</button>
+                            <button class="btn-pin" data-chart="payment-types" data-title="Payment Types Breakdown">📌 Pin</button>
                         </div>
                         <canvas id="payment-types-chart"></canvas>
-                    </div>
-
-                    <div class="chart-container">
-                        <div class="chart-header">
-                            <h3>Hourly Distribution</h3>
-                            <button class="btn-pin" data-chart="hourly-dist">📌 Pin</button>
-                        </div>
-                        <canvas id="hourly-chart"></canvas>
-                    </div>
-
-                    <div class="chart-container">
-                        <div class="chart-header">
-                            <h3>Card Types</h3>
-                            <button class="btn-pin" data-chart="card-types">📌 Pin</button>
-                        </div>
-                        <canvas id="card-types-chart"></canvas>
                     </div>
                 </div>
             </section>
 
-            <!-- My Charts Section - SAVED CUSTOM CHARTS -->
             <section id="charts-section" class="content-section">
                 <div class="header">
                     <h2>My Pinned Charts</h2>
-                    <button id="clear-pins-btn" class="btn-secondary">Clear All</button>
+                    <button id="clear-pins-btn" class="btn-secondary">🗑️ Clear All</button>
                 </div>
                 <div id="pinned-charts-container" class="charts-grid">
                     <div class="empty-state">
@@ -129,7 +498,6 @@
                 </div>
             </section>
 
-            <!-- Chart Builder Section - CREATE CUSTOM CHARTS -->
             <section id="builder-section" class="content-section">
                 <div class="header">
                     <h2>🎨 Custom Chart Builder</h2>
@@ -138,7 +506,7 @@
                 <div class="builder-form">
                     <div class="form-group">
                         <label>Chart Title</label>
-                        <input type="text" id="chart-title" placeholder="e.g., Weekly Sales Trend" />
+                        <input type="text" id="chart-title" placeholder="e.g., Weekly Sales Trend" value="Custom Revenue Chart" />
                     </div>
 
                     <div class="form-row">
@@ -149,7 +517,6 @@
                                 <option value="bar">Bar Chart</option>
                                 <option value="pie">Pie Chart</option>
                                 <option value="doughnut">Doughnut Chart</option>
-                                <option value="area">Area Chart</option>
                             </select>
                         </div>
 
@@ -157,7 +524,6 @@
                             <label>Data Source</label>
                             <select id="data-source">
                                 <option value="daily">Daily Revenue</option>
-                                <option value="hourly">Hourly Distribution</option>
                                 <option value="payment-types">Payment Types</option>
                                 <option value="card-types">Card Types</option>
                                 <option value="transaction-count">Transaction Count</option>
@@ -188,7 +554,6 @@
                     </div>
                 </div>
 
-                <!-- Preview Area -->
                 <div class="chart-preview">
                     <h3>Preview</h3>
                     <div class="chart-container">
@@ -197,7 +562,6 @@
                 </div>
             </section>
 
-            <!-- Transactions Section -->
             <section id="transactions-section" class="content-section">
                 <div class="header">
                     <h2>Recent Transactions</h2>
@@ -228,6 +592,574 @@
         </main>
     </div>
 
-    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+    <script>
+        // --- JavaScript Logic ---
+
+        // Global state
+        let charts = {};
+        // Load pinned charts from local storage
+        let pinnedCharts = JSON.parse(localStorage.getItem('pinnedCharts')) || []; 
+        let currentData = {}; // Stores data for Overview charts
+
+        // Color schemes
+        const colorSchemes = {
+            blue: ['#2563eb', '#3b82f6', '#60a5fa', '#93c5fd', '#bfdbfe'],
+            green: ['#10b981', '#34d399', '#6ee7b7', '#a7f3d0', '#d1fae5'],
+            purple: ['#8b5cf6', '#a78bfa', '#c4b5fd', '#ddd6fe', '#ede9fe'],
+            rainbow: ['#ef4444', '#f59e0b', '#10b981', '#3b82f6', '#8b5cf6']
+        };
+
+        // Initialize dashboard
+        document.addEventListener('DOMContentLoaded', () => {
+            initNavigation();
+            initDateFilter();
+            loadMerchantInfo();
+            loadDashboardData();
+            initChartBuilder();
+            loadPinnedCharts(); // Load pinned charts on startup
+            initTransactions();
+            initOverviewPinning(); // Setup pinning for default charts
+            
+            // Refresh button
+            document.getElementById('refresh-btn').addEventListener('click', () => {
+                loadDashboardData();
+                showNotification('Data refreshed successfully', 'success');
+            });
+        });
+
+        // --- Core Functions (No Changes) ---
+
+        function initNavigation() {
+            const navButtons = document.querySelectorAll('.nav-btn');
+            
+            navButtons.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    navButtons.forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    
+                    document.querySelectorAll('.content-section').forEach(section => {
+                        section.classList.remove('active');
+                    });
+                    
+                    const view = btn.dataset.view;
+                    document.getElementById(`${view}-section`).classList.add('active');
+                    
+                    // Re-render charts when switching to the pinned charts view
+                    if (view === 'charts') {
+                        loadPinnedCharts(); 
+                    }
+                });
+            });
+        }
+
+        function initDateFilter() {
+            const today = new Date().toISOString().split('T')[0];
+            const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+            
+            document.getElementById('end-date').value = today;
+            document.getElementById('start-date').value = thirtyDaysAgo;
+            
+            document.getElementById('apply-filter').addEventListener('click', () => {
+                // In a real application, you would pass these dates to the backend API calls
+                loadDashboardData(); 
+                initTransactions();
+                showNotification('Filter applied (Note: Backend date filtering must be implemented in app.py)', 'info');
+            });
+        }
+
+        async function loadMerchantInfo() {
+            try {
+                const response = await fetch('/api/merchant');
+                const data = await response.json();
+                
+                if (data.merchant_profile) {
+                    document.getElementById('merchant-name').textContent = 
+                        data.merchant_profile.doing_business_as?.business_name || 
+                        data.merchant_profile.merchant_code;
+                }
+            } catch (error) {
+                console.error('Error loading merchant info:', error);
+            }
+        }
+
+        async function loadDashboardData() {
+            try {
+                // Load summary
+                const summaryResponse = await fetch('/api/analytics/summary');
+                
+                if (!summaryResponse.ok) {
+                    throw new Error(`API returned ${summaryResponse.status}`);
+                }
+                
+                const summary = await summaryResponse.json();
+                
+                if (summary.error) {
+                    throw new Error(summary.error);
+                }
+                
+                // Update Summary Cards
+                document.getElementById('total-revenue').textContent = `£${(summary.total_revenue || 0).toFixed(2)}`;
+                document.getElementById('total-transactions').textContent = summary.total_transactions || 0;
+                document.getElementById('avg-transaction').textContent = `£${(summary.avg_transaction || 0).toFixed(2)}`;
+                document.getElementById('failed-transactions').textContent = summary.failed_transactions || 0;
+                
+                currentData.summary = summary;
+                
+                // Load and create charts
+                await Promise.all([
+                    loadDailyRevenue(),
+                    loadPaymentTypes()
+                ]);
+                
+            } catch (error) {
+                console.error('Error loading dashboard data:', error);
+                // Fallback for blank data
+                showNotification('Error loading analytics data. Check app.py status filters.', 'error');
+            }
+        }
+
+        // --- Chart Specific Loaders (No Changes) ---
+
+        async function loadDailyRevenue() {
+            try {
+                // Assumes backend provides a list of {date: "YYYY-MM-DD", revenue: X}
+                const response = await fetch('/api/analytics/daily?days=30');
+                const data = await response.json();
+                
+                currentData.daily = data;
+                
+                const ctx = document.getElementById('daily-revenue-chart');
+                destroyChart('dailyRevenue');
+                
+                charts.dailyRevenue = createChart(ctx, 'line', {
+                    labels: data.map(d => d.date),
+                    datasets: [{
+                        label: 'Revenue (£)',
+                        data: data.map(d => d.revenue),
+                        borderColor: '#2563eb',
+                        backgroundColor: 'rgba(37, 99, 235, 0.1)',
+                        tension: 0.4,
+                        fill: true
+                    }]
+                }, 'Daily Revenue');
+
+            } catch (error) {
+                console.error('Error loading daily revenue:', error);
+            }
+        }
+
+        async function loadPaymentTypes() {
+            try {
+                // Re-fetch summary to ensure payment_types are current
+                const response = await fetch('/api/analytics/summary');
+                const data = await response.json();
+                
+                const paymentTypes = data.payment_types || {};
+                const ctx = document.getElementById('payment-types-chart');
+                destroyChart('paymentTypes');
+                
+                charts.paymentTypes = createChart(ctx, 'doughnut', {
+                    labels: Object.keys(paymentTypes),
+                    datasets: [{
+                        data: Object.values(paymentTypes),
+                        backgroundColor: colorSchemes.rainbow
+                    }]
+                }, 'Payment Types');
+
+            } catch (error) {
+                console.error('Error loading payment types:', error);
+            }
+        }
+
+        // --- Chart Builder/Pinning Logic (No Changes) ---
+
+        function initOverviewPinning() {
+            document.querySelectorAll('.btn-pin').forEach(btn => {
+                // Remove previous listeners to prevent duplicates
+                btn.removeEventListener('click', handleOverviewPin);
+                btn.addEventListener('click', handleOverviewPin);
+            });
+        }
+
+        function handleOverviewPin(event) {
+            const btn = event.target;
+            const chartKey = btn.dataset.chart;
+            const chartTitle = btn.dataset.title;
+
+            // Define the configuration for the default chart
+            let chartConfig;
+            switch (chartKey) {
+                case 'daily-revenue':
+                    chartConfig = {
+                        title: chartTitle,
+                        type: 'line',
+                        dataSource: 'daily',
+                        period: 30,
+                        colorScheme: 'blue'
+                    };
+                    break;
+                case 'payment-types':
+                    chartConfig = {
+                        title: chartTitle,
+                        type: 'doughnut',
+                        dataSource: 'payment-types',
+                        period: 30,
+                        colorScheme: 'rainbow'
+                    };
+                    break;
+                default:
+                    return;
+            }
+            
+            saveChart(chartConfig);
+        }
+
+        function initChartBuilder() {
+            document.getElementById('preview-chart-btn').addEventListener('click', previewCustomChart);
+            document.getElementById('save-chart-btn').addEventListener('click', saveCustomChart);
+        }
+
+        async function previewCustomChart() {
+            const title = document.getElementById('chart-title').value || 'Custom Chart';
+            const type = document.getElementById('chart-type').value;
+            const dataSource = document.getElementById('data-source').value;
+            const period = document.getElementById('time-period').value;
+            const colorScheme = document.getElementById('color-scheme').value;
+            
+            const chartData = await getChartData(dataSource, period);
+            
+            const ctx = document.getElementById('preview-chart');
+            destroyChart('preview');
+            
+            charts.preview = createCustomChart(ctx, type, title, chartData, colorScheme);
+        }
+
+        async function saveCustomChart() {
+            const title = document.getElementById('chart-title').value;
+            
+            if (!title) {
+                showNotification('Please enter a chart title', 'error');
+                return;
+            }
+            
+            const chartConfig = {
+                title: title,
+                type: document.getElementById('chart-type').value,
+                dataSource: document.getElementById('data-source').value,
+                period: document.getElementById('time-period').value,
+                colorScheme: document.getElementById('color-scheme').value,
+            };
+            
+            saveChart(chartConfig);
+        }
+
+        function saveChart(config) {
+            const newConfig = {
+                id: Date.now().toString(), // Unique ID
+                ...config,
+                timestamp: new Date().toISOString()
+            };
+            
+            pinnedCharts.push(newConfig);
+            localStorage.setItem('pinnedCharts', JSON.stringify(pinnedCharts));
+            
+            // Switch to My Charts view to show the new chart
+            loadPinnedCharts();
+            document.querySelector('[data-view="charts"]').click();
+            showNotification('Chart saved and pinned successfully', 'success');
+        }
+
+
+        async function loadPinnedCharts() {
+            const container = document.getElementById('pinned-charts-container');
+            
+            // Destroy all existing charts in the pinnedCharts container to prevent duplicates
+            Object.keys(charts).filter(key => key.startsWith('pinned-')).forEach(key => destroyChart(key));
+
+            if (pinnedCharts.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <p>📌 No pinned charts yet</p>
+                        <p>Pin charts from Overview or create custom ones in Chart Builder</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            container.innerHTML = '';
+            
+            for (const chartConfig of pinnedCharts) {
+                const chartDiv = document.createElement('div');
+                chartDiv.className = 'chart-container';
+                chartDiv.innerHTML = `
+                    <div class="chart-header">
+                        <h3>${chartConfig.title}</h3>
+                        <button class="btn-pin pinned" data-id="${chartConfig.id}">🗑️ Remove</button>
+                    </div>
+                    <canvas id="pinned-${chartConfig.id}"></canvas>
+                `;
+                
+                container.appendChild(chartDiv);
+                
+                // Load and render chart
+                try {
+                    const chartData = await getChartData(chartConfig.dataSource, chartConfig.period);
+                    const ctx = document.getElementById(`pinned-${chartConfig.id}`);
+                    
+                    // Store the Chart.js instance in the global 'charts' object
+                    charts[`pinned-${chartConfig.id}`] = createCustomChart(ctx, chartConfig.type, '', chartData, chartConfig.colorScheme);
+                } catch (e) {
+                    console.error('Failed to load pinned chart data:', e);
+                    // Display error on the chart canvas if data fails
+                    const ctx = document.getElementById(`pinned-${chartConfig.id}`);
+                    ctx.parentNode.innerHTML += '<p style="color:var(--error-color); text-align:center;">Error: Failed to fetch chart data from API.</p>';
+                }
+
+
+                // Remove button listener
+                chartDiv.querySelector('.btn-pin').addEventListener('click', () => {
+                    removePinnedChart(chartConfig.id);
+                });
+            }
+            
+            // Clear all button
+            document.getElementById('clear-pins-btn').addEventListener('click', () => {
+                if (confirm('Remove all pinned charts?')) {
+                    pinnedCharts = [];
+                    localStorage.setItem('pinnedCharts', JSON.stringify(pinnedCharts));
+                    loadPinnedCharts();
+                    showNotification('All charts removed', 'success');
+                }
+            });
+        }
+
+        function removePinnedChart(id) {
+            // Find and destroy the Chart.js instance first
+            destroyChart(`pinned-${id}`);
+
+            pinnedCharts = pinnedCharts.filter(chart => chart.id !== id);
+            localStorage.setItem('pinnedCharts', JSON.stringify(pinnedCharts));
+            loadPinnedCharts();
+            showNotification('Chart removed', 'success');
+        }
+
+        // --- Data Fetching and Mapping (Mock Data Fallback Removed) ---
+
+        // Helper function to fetch data from the backend
+        async function getChartData(dataSource, period) {
+            let response;
+            
+            switch (dataSource) {
+                case 'daily':
+                case 'transaction-count': // Both can use the daily endpoint
+                    response = await fetch(`/api/analytics/daily?days=${period}`);
+                    const dailyData = await response.json();
+                    
+                    if (!dailyData || dailyData.length === 0) {
+                         throw new Error(`No data returned for ${dataSource}`);
+                    }
+                    
+                    return {
+                        labels: dailyData.map(d => d.date),
+                        datasets: [{
+                            label: dataSource === 'daily' ? 'Revenue' : 'Transactions',
+                            data: dailyData.map(d => dataSource === 'daily' ? d.revenue : d.count)
+                        }]
+                    };
+                    
+                case 'payment-types':
+                    response = await fetch('/api/analytics/summary');
+                    const summaryData = await response.json();
+                    const paymentTypes = summaryData.payment_types || {};
+
+                    if (Object.keys(paymentTypes).length === 0) {
+                         throw new Error('No payment types data found');
+                    }
+                    
+                    return {
+                        labels: Object.keys(paymentTypes),
+                        datasets: [{
+                            data: Object.values(paymentTypes)
+                        }]
+                    };
+                    
+                case 'card-types':
+                    response = await fetch(`/api/analytics/card-types?days=${period}`);
+                    const cardData = await response.json();
+
+                    if (!cardData || Object.keys(cardData).length === 0) {
+                         throw new Error('No card types data found');
+                    }
+                    
+                    return {
+                        labels: Object.keys(cardData || {}),
+                        datasets: [{
+                            data: Object.keys(cardData || {}).map(key => cardData[key].count)
+                        }]
+                    };
+                default:
+                    throw new Error(`Unknown data source: ${dataSource}`);
+            }
+        }
+
+        // --- Chart Rendering Utility (No Changes) ---
+
+        function destroyChart(chartKey) {
+            if (charts[chartKey]) {
+                charts[chartKey].destroy();
+                delete charts[chartKey];
+            }
+        }
+
+        function createChart(ctx, type, data, title) {
+            // General chart creation used by Overview
+            return new Chart(ctx, {
+                type: type,
+                data: data,
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: type === 'doughnut' ? 'bottom' : 'top'
+                        },
+                        title: {
+                            display: true,
+                            text: title
+                        }
+                    },
+                    scales: type !== 'pie' && type !== 'doughnut' ? {
+                        y: {
+                            beginAtZero: true
+                        }
+                    } : {}
+                }
+            });
+        }
+
+        function createCustomChart(ctx, type, title, data, colorScheme) {
+            // Chart creation used by Builder/Pinned Charts
+            const colors = colorSchemes[colorScheme];
+            
+            return new Chart(ctx, {
+                type: type,
+                data: {
+                    labels: data.labels,
+                    datasets: data.datasets.map(dataset => ({
+                        ...dataset,
+                        backgroundColor: (type === 'line' || type === 'bar') ? colors[0] : colors,
+                        borderColor: colors[0],
+                        fill: type === 'line' ? 'start' : false, // For line charts
+                        tension: 0.4
+                    }))
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'bottom'
+                        },
+                        title: {
+                            display: title !== '', // Only display title if provided
+                            text: title
+                        }
+                    },
+                    scales: type !== 'pie' && type !== 'doughnut' ? {
+                        y: {
+                            beginAtZero: true
+                        }
+                    } : {}
+                }
+            });
+        }
+
+
+        // --- Transactions and CSV Export (No Changes) ---
+
+        async function initTransactions() {
+            try {
+                const response = await fetch('/api/transactions?limit=100');
+                const data = await response.json();
+                
+                const tbody = document.getElementById('transactions-body');
+                tbody.innerHTML = '';
+                
+                if (!data.items || data.items.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="7" class="loading">No transactions found</td></tr>';
+                    return;
+                }
+                
+                // Sort by date (most recent first)
+                const sortedTransactions = data.items.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+                sortedTransactions.forEach(txn => {
+                    const date = new Date(txn.timestamp);
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td>${date.toLocaleDateString()}</td>
+                        <td>${date.toLocaleTimeString()}</td>
+                        <td>£${(txn.amount / 100).toFixed(2)}</td> 
+                        <td><span class="status-badge status-${txn.status.toLowerCase()}">${txn.status}</span></td>
+                        <td>${txn.payment_type || 'N/A'}</td>
+                        <td>${txn.card_type || 'N/A'}</td>
+                        <td>${txn.transaction_code || txn.id}</td>
+                    `;
+                    tbody.appendChild(row);
+                });
+                
+                // Export CSV
+                document.getElementById('export-csv-btn').addEventListener('click', () => {
+                    exportToCSV(sortedTransactions);
+                });
+                
+            } catch (error) {
+                console.error('Error loading transactions:', error);
+                document.getElementById('transactions-body').innerHTML = '<tr><td colspan="7" class="loading status-failed">Error loading transactions. Check API endpoint.</td></tr>';
+            }
+        }
+
+        function exportToCSV(transactions) {
+            const headers = ['Date', 'Time', 'Amount', 'Status', 'Payment Type', 'Card Type', 'Transaction ID'];
+            const rows = transactions.map(txn => {
+                const date = new Date(txn.timestamp);
+                return [
+                    date.toLocaleDateString(),
+                    date.toLocaleTimeString(),
+                    (txn.amount / 100).toFixed(2), // Convert from cents/pence to currency
+                    txn.status,
+                    txn.payment_type || 'N/A',
+                    txn.card_type || 'N/A',
+                    txn.transaction_code || txn.id
+                ];
+            });
+            
+            let csvContent = headers.join(',') + '\n';
+            rows.forEach(row => {
+                csvContent += row.map(e => `"${e}"`).join(',') + '\n'; // Quote fields for safety
+            });
+            
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `sumup-transactions-${new Date().toISOString().split('T')[0]}.csv`;
+            a.click();
+            
+            showNotification('CSV exported successfully', 'success');
+        }
+
+
+        // --- Utilities (No Changes) ---
+
+        function showNotification(message, type) {
+            // Basic notification using alert. Can be replaced with a stylish toast notification.
+            console.log(`[${type.toUpperCase()}] ${message}`);
+            // alert(message); 
+        }
+
+    </script>
 </body>
-  </html>
+</html>
