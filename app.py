@@ -1,367 +1,211 @@
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template_string, jsonify, request, session
 from flask_cors import CORS
 import requests
 from datetime import datetime, timedelta
 import os
-import traceback
 
 app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key')
+app.secret_key = os.environ.get('SECRET_KEY', 'change-this-secret-key-in-production')
 CORS(app)
 
-# --- Configuration ---
-SUMUP_API_KEY = os.getenv('SUMUP_API_KEY')
-# Set Base URL to the root
-SUMUP_API_ROOT = "https://api.sumup.com"
+GOODTILL_API_ROOT = "https://api.thegoodtill.com/api"
 
-# Simple cache to avoid spamming the /me endpoint
-CACHED_MERCHANT_CODE = None
-
-def get_sumup_headers():
-    if not SUMUP_API_KEY:
-        raise ValueError("SUMUP_API_KEY environment variable is not set.")
-    return {
-        "Authorization": f"Bearer {SUMUP_API_KEY}",
-        "Content-Type": "application/json"
-    }
-
-def get_merchant_code():
-    """
-    Fetches the Merchant Code from SumUp /me endpoint, handling nested JSON.
-    """
-    global CACHED_MERCHANT_CODE
-    
-    if CACHED_MERCHANT_CODE:
-        return CACHED_MERCHANT_CODE
-        
-    try:
-        response = requests.get(
-            f"{SUMUP_API_ROOT}/v0.1/me", 
-            headers=get_sumup_headers()
-        )
-        response.raise_for_status()
-        data = response.json()
-        
-        # 1. Try top level (standard)
-        code = data.get('merchant_code')
-        # 2. Try nested in merchant_profile (most common SumUp structure)
-        if not code:
-            code = data.get('merchant_profile', {}).get('merchant_code')
-            
-        if not code:
-            raise ValueError("Could not find 'merchant_code' in /me response. Check JSON structure.")
-            
-        CACHED_MERCHANT_CODE = code
-        return code
-    except Exception as e:
-        print(f"Failed to fetch merchant code: {e}")
-        raise
-
-# --- Helper Functions (Remaining functions unchanged for brevity) ---
-def parse_sumup_timestamp(timestamp_str):
-    if not timestamp_str:
-        return None
-    try:
-        clean_ts = timestamp_str.replace('Z', '+00:00')
-        return datetime.fromisoformat(clean_ts)
-    except ValueError:
-        return None
-
-# --- Routes ---
-
+# Serve the HTML
 @app.route('/')
 def index():
-    return render_template('index.html')
+    with open('index.html', 'r') as f:
+        return render_template_string(f.read())
 
+# Login - Get JWT from GoodTill
+@app.route('/api/login', methods=['POST'])
+def login():
+    try:
+        data = request.get_json()
+        subdomain = data.get('subdomain')
+        username = data.get('username')
+        password = data.get('password')
+        
+        # Call GoodTill login API
+        response = requests.post(
+            f"{GOODTILL_API_ROOT}/login",
+            json={"subdomain": subdomain, "username": username, "password": password},
+            headers={"Content-Type": "application/json"}
+        )
+        
+        if response.status_code != 200:
+            return jsonify({"error": "Authentication failed"}), response.status_code
+        
+        auth_data = response.json()
+        
+        # Store JWT token in session
+        session.permanent = True
+        session['token'] = auth_data.get('token')
+        session['subdomain'] = subdomain
+        session['username'] = username
+        
+        return jsonify({"success": True, "message": "Login successful"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# Logout
+@app.route('/api/logout', methods=['POST'])
+def logout():
+    session.clear()
+    return jsonify({"success": True})
+
+# Check if authenticated
+@app.route('/api/check-auth', methods=['GET'])
+def check_auth():
+    if 'token' in session:
+        return jsonify({"authenticated": True, "username": session.get('username')})
+    return jsonify({"authenticated": False}), 401
+
+# Get merchant info
 @app.route('/api/merchant', methods=['GET'])
 def get_merchant():
-    try:
-        response = requests.get(
-            f"{SUMUP_API_ROOT}/v0.1/me",
-            headers=get_sumup_headers()
-        )
-        response.raise_for_status()
-        return jsonify(response.json())
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    if 'token' not in session:
+        return jsonify({"error": "Not authenticated"}), 401
+    return jsonify({"subdomain": session.get('subdomain'), "username": session.get('username')})
 
+# Get transactions
 @app.route('/api/transactions', methods=['GET'])
 def get_transactions():
+    if 'token' not in session:
+        return jsonify({"error": "Not authenticated"}), 401
+    
     try:
-        merchant_code = get_merchant_code()
-        
-        start_date = request.args.get('start_date')
-        end_date = request.args.get('end_date')
-        limit = request.args.get('limit', 100)
-        
-        params = {"limit": limit}
-        if start_date:
-            params['oldest_time'] = f"{start_date}T00:00:00Z"
-        if end_date:
-            params['newest_time'] = f"{end_date}T23:59:59Z"
-        
-        # 🚨 FIX: Using explicit /v0.1/me/transactions/history endpoint
-        url = f"{SUMUP_API_ROOT}/v0.1/me/transactions/history"
-        
-        # NOTE: We are reverting to /me/transactions/history as the /merchants/{code} path is failing
-        # This path works for keys with 'transaction.history' scope
+        start_date = request.args.get('start_date', (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d"))
+        end_date = request.args.get('end_date', datetime.now().strftime("%Y-%m-%d"))
+        limit = int(request.args.get('limit', 100))
         
         response = requests.get(
-            url,
-            headers=get_sumup_headers(),
-            params=params
+            f"{GOODTILL_API_ROOT}/external/get_sales_details",
+            headers={"Authorization": f"Bearer {session['token']}", "Content-Type": "application/json"},
+            params={'timezone': 'local', 'from': start_date, 'to': end_date, 'limit': limit, 'offset': 0}
         )
         response.raise_for_status()
-        return jsonify(response.json())
         
+        sales = response.json().get('data', [])
+        
+        # Transform to standard format
+        transformed = []
+        for sale in sales:
+            transformed.append({
+                "id": sale.get('id'),
+                "transaction_code": sale.get('receipt_no', sale.get('id')),
+                "timestamp": sale.get('datetime_completed') or sale.get('datetime_created'),
+                "amount": float(sale.get('total', 0)),
+                "status": "SUCCESSFUL" if sale.get('status') == 'completed' else "FAILED",
+                "payment_type": sale.get('payments', [{}])[0].get('type', 'CARD') if sale.get('payments') else 'CARD',
+                "currency": "GBP"
+            })
+        
+        return jsonify({"items": transformed, "total": len(transformed)})
     except Exception as e:
-        print(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
+# Analytics summary
 @app.route('/api/analytics/summary', methods=['GET'])
 def get_summary():
+    if 'token' not in session:
+        return jsonify({"error": "Not authenticated"}), 401
+    
     try:
-        merchant_code = get_merchant_code() # Still needed for scope/caching, but URL changed
-
         end_date = datetime.now()
         start_date = end_date - timedelta(days=30)
         
-        params = {
-            "limit": 1000,
-            "oldest_time": start_date.strftime("%Y-%m-%dT00:00:00Z"),
-            "newest_time": end_date.strftime("%Y-%m-%dT23:59:59Z")
-        }
-        
-        # 🚨 FIX: Using explicit /v0.1/me/transactions/history endpoint
-        url = f"{SUMUP_API_ROOT}/v0.1/me/transactions/history"
-        
         response = requests.get(
-            url,
-            headers=get_sumup_headers(),
-            params=params
+            f"{GOODTILL_API_ROOT}/external/get_sales_details",
+            headers={"Authorization": f"Bearer {session['token']}", "Content-Type": "application/json"},
+            params={
+                'timezone': 'local',
+                'from': start_date.strftime("%Y-%m-%d"),
+                'to': end_date.strftime("%Y-%m-%d"),
+                'limit': 1000,
+                'offset': 0
+            }
         )
         response.raise_for_status()
         
-        data = response.json()
-        transactions = data.get('items', [])
+        sales = response.json().get('data', [])
         
-        # ... (Analytics logic unchanged)
         total_revenue = 0.0
-        successful_txns = []
-        failed_txns = []
-        
-        for txn in transactions:
-            status = txn.get('status', '')
-            if status == 'SUCCESSFUL':
-                successful_txns.append(txn)
-                amount = float(txn.get('amount', 0))
-                total_revenue += amount
-            elif status == 'FAILED':
-                failed_txns.append(txn)
-        
-        total_transactions = len(successful_txns)
-        avg_transaction = total_revenue / total_transactions if total_transactions > 0 else 0
-        
+        successful_count = 0
+        failed_count = 0
         payment_types = {}
-        for txn in successful_txns:
-            ptype = txn.get('payment_type', 'UNKNOWN')
-            amount = float(txn.get('amount', 0))
-            payment_types[ptype] = payment_types.get(ptype, 0) + amount
+        
+        for sale in sales:
+            status = sale.get('status', '').lower()
+            amount = float(sale.get('total', 0))
             
-        payment_types = {k: round(v, 2) for k, v in payment_types.items()}
+            if status == 'completed':
+                successful_count += 1
+                total_revenue += amount
+                
+                payments = sale.get('payments', [])
+                if payments:
+                    ptype = payments[0].get('type', 'CARD')
+                    payment_types[ptype] = payment_types.get(ptype, 0) + amount
+            elif status in ['voided', 'cancelled']:
+                failed_count += 1
         
-        result = {
+        avg_transaction = total_revenue / successful_count if successful_count > 0 else 0
+        
+        return jsonify({
             "total_revenue": round(total_revenue, 2),
-            "total_transactions": total_transactions,
+            "total_transactions": successful_count,
             "avg_transaction": round(avg_transaction, 2),
-            "failed_transactions": len(failed_txns),
-            "payment_types": payment_types,
+            "failed_transactions": failed_count,
+            "payment_types": {k: round(v, 2) for k, v in payment_types.items()},
             "period": "Last 30 days"
-        }
-        
-        return jsonify(result)
-        
+        })
     except Exception as e:
-        print(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
-# (Hourly, Daily, and Card Type routes omitted for brevity in the final response, 
-# but they need the same URL change as summary/transactions)
-
+# Daily analytics
 @app.route('/api/analytics/daily', methods=['GET'])
 def get_daily_analytics():
+    if 'token' not in session:
+        return jsonify({"error": "Not authenticated"}), 401
+    
     try:
-        merchant_code = get_merchant_code() # Still needed for scope/caching
-
         days = int(request.args.get('days', 30))
         end_date = datetime.now()
         start_date = end_date - timedelta(days=days)
         
-        params = {
-            "limit": 1000,
-            "oldest_time": start_date.strftime("%Y-%m-%dT00:00:00Z"),
-            "newest_time": end_date.strftime("%Y-%m-%dT23:59:59Z")
-        }
-        
-        # 🚨 FIX: Using explicit /v0.1/me/transactions/history endpoint
-        url = f"{SUMUP_API_ROOT}/v0.1/me/transactions/history"
-
         response = requests.get(
-            url,
-            headers=get_sumup_headers(),
-            params=params
+            f"{GOODTILL_API_ROOT}/external/get_sales_details",
+            headers={"Authorization": f"Bearer {session['token']}", "Content-Type": "application/json"},
+            params={
+                'timezone': 'local',
+                'from': start_date.strftime("%Y-%m-%d"),
+                'to': end_date.strftime("%Y-%m-%d"),
+                'limit': 1000,
+                'offset': 0
+            }
         )
         response.raise_for_status()
-        transactions = response.json().get('items', [])
+        
+        sales = response.json().get('data', [])
         
         daily_agg = {}
-        for txn in transactions:
-            if txn.get('status') == 'SUCCESSFUL':
-                timestamp_str = txn.get('timestamp', '')
-                date_key = timestamp_str[:10] if timestamp_str else 'unknown'
+        for sale in sales:
+            if sale.get('status', '').lower() == 'completed':
+                date_str = sale.get('datetime_completed') or sale.get('datetime_created', '')
+                date_key = date_str[:10] if date_str else 'unknown'
                 
-                if date_key:
+                if date_key and date_key != 'unknown':
                     if date_key not in daily_agg:
                         daily_agg[date_key] = {'revenue': 0.0, 'count': 0}
-                    
-                    daily_agg[date_key]['revenue'] += float(txn.get('amount', 0))
+                    daily_agg[date_key]['revenue'] += float(sale.get('total', 0))
                     daily_agg[date_key]['count'] += 1
         
         sorted_data = [
-            {
-                'date': d_key,
-                'revenue': round(d_val['revenue'], 2),
-                'count': d_val['count']
-            }
+            {'date': d_key, 'revenue': round(d_val['revenue'], 2), 'count': d_val['count']}
             for d_key, d_val in sorted(daily_agg.items())
         ]
         
         return jsonify(sorted_data)
-        
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/analytics/hourly', methods=['GET'])
-def get_hourly_analytics():
-    try:
-        merchant_code = get_merchant_code()
-
-        days = int(request.args.get('days', 7))
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=days)
-        
-        params = {
-            "limit": 1000,
-            "oldest_time": start_date.strftime("%Y-%m-%dT00:00:00Z"),
-            "newest_time": end_date.strftime("%Y-%m-%dT23:59:59Z")
-        }
-        
-        # 🚨 FIX: Using explicit /v0.1/me/transactions/history endpoint
-        url = f"{SUMUP_API_ROOT}/v0.1/me/transactions/history"
-
-        response = requests.get(
-            url,
-            headers=get_sumup_headers(),
-            params=params
-        )
-        response.raise_for_status()
-        transactions = response.json().get('items', [])
-        
-        hourly_agg = {str(i): {'revenue': 0.0, 'count': 0} for i in range(24)}
-        
-        for txn in transactions:
-            if txn.get('status') == 'SUCCESSFUL':
-                dt = parse_sumup_timestamp(txn.get('timestamp'))
-                if dt:
-                    hour_key = str(dt.hour)
-                    hourly_agg[hour_key]['revenue'] += float(txn.get('amount', 0))
-                    hourly_agg[hour_key]['count'] += 1
-        
-        sorted_data = [
-            {
-                'hour': int(h_key),
-                'revenue': round(h_val['revenue'], 2),
-                'count': h_val['count']
-            }
-            for h_key, h_val in sorted(hourly_agg.items(), key=lambda x: int(x[0]))
-        ]
-        
-        return jsonify(sorted_data)
-        
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/analytics/card-types', methods=['GET'])
-def get_card_types():
-    try:
-        merchant_code = get_merchant_code()
-
-        days = int(request.args.get('days', 30))
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=days)
-        
-        params = {
-            "limit": 1000,
-            "oldest_time": start_date.strftime("%Y-%m-%dT00:00:00Z"),
-            "newest_time": end_date.strftime("%Y-%m-%dT23:59:59Z")
-        }
-        
-        # 🚨 FIX: Using explicit /v0.1/me/transactions/history endpoint
-        url = f"{SUMUP_API_ROOT}/v0.1/me/transactions/history"
-
-        response = requests.get(
-            url,
-            headers=get_sumup_headers(),
-            params=params
-        )
-        response.raise_for_status()
-        transactions = response.json().get('items', [])
-        
-        card_types = {}
-        for txn in transactions:
-            if txn.get('status') == 'SUCCESSFUL':
-                c_type = txn.get('card_type')
-                if not c_type and 'card' in txn:
-                    c_type = txn['card'].get('type')
-                
-                c_type = c_type or 'UNKNOWN'
-                
-                if c_type not in card_types:
-                    card_types[c_type] = {'count': 0, 'revenue': 0.0}
-                
-                card_types[c_type]['count'] += 1
-                card_types[c_type]['revenue'] += float(txn.get('amount', 0))
-        
-        for k in card_types:
-            card_types[k]['revenue'] = round(card_types[k]['revenue'], 2)
-
-        return jsonify(card_types)
-        
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route('/api/test-sumup', methods=['GET'])
-def test_sumup():
-    try:
-        # Test 1: Check merchant endpoint (/v0.1/me)
-        resp_me = requests.get(f"{SUMUP_API_ROOT}/v0.1/me", headers=get_sumup_headers())
-        
-        m_code = "UNKNOWN"
-        if resp_me.ok:
-            data = resp_me.json()
-            m_code = data.get('merchant_code') or data.get('merchant_profile', {}).get('merchant_code') or "FOUND_BUT_PARSING_ERROR"
-            
-        # Test 2: Check transactions using the new /me/transactions/history endpoint
-        txn_url = f"{SUMUP_API_ROOT}/v0.1/me/transactions/history?limit=1"
-        resp_txn = requests.get(txn_url, headers=get_sumup_headers())
-        
-        return jsonify({
-            "step_1_merchant_profile_status": resp_me.status_code,
-            "step_2_transaction_history_status": resp_txn.status_code,
-            "merchant_code_extracted": m_code,
-            "test_endpoint_used": txn_url
-        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
