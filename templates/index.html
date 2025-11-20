@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>GoodTill Analytics Dashboard</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
     <style>
         :root {
             --sidebar-width: 280px;
@@ -307,7 +307,7 @@
             border-radius: 12px;
             padding: 20px;
             box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
-            min-height: 350px;
+            min-height: 400px;
         }
 
         .btn-refresh, .btn-secondary {
@@ -474,12 +474,12 @@
                 <div class="charts-grid">
                     <div class="chart-container">
                         <h3>Daily Revenue</h3>
-                        <canvas id="daily-revenue-chart"></canvas>
+                        <div id="daily-revenue-chart"></div>
                     </div>
 
                     <div class="chart-container">
                         <h3>Payment Types</h3>
-                        <canvas id="payment-types-chart"></canvas>
+                        <div id="payment-types-chart"></div>
                     </div>
                 </div>
             </section>
@@ -513,10 +513,9 @@
     </div>
 
     <script>
-        let charts = {};
         let currentData = {};
+        let isLoading = false;
 
-        // Check auth on load
         window.addEventListener('DOMContentLoaded', async () => {
             const response = await fetch('/api/check-auth').catch(() => null);
             if (response && response.ok) {
@@ -527,7 +526,6 @@
             }
         });
 
-        // Login
         document.getElementById('loginForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             const btn = document.getElementById('loginBtn');
@@ -561,7 +559,6 @@
             }
         });
 
-        // Logout
         document.getElementById('logout-btn').addEventListener('click', async () => {
             await fetch('/api/logout', {method: 'POST'});
             location.reload();
@@ -585,7 +582,6 @@
         }
 
         async function initDashboard() {
-            // Nav
             document.querySelectorAll('.nav-btn').forEach(btn => {
                 btn.addEventListener('click', () => {
                     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
@@ -595,24 +591,17 @@
                 });
             });
 
-            // Dates
             const today = new Date().toISOString().split('T')[0];
             const thirtyDaysAgo = new Date(Date.now() - 30*24*60*60*1000).toISOString().split('T')[0];
             document.getElementById('end-date').value = today;
             document.getElementById('start-date').value = thirtyDaysAgo;
 
-            document.getElementById('apply-filter').addEventListener('click', () => {
-                loadDashboardData();
-                loadTransactions();
-            });
-
+            document.getElementById('apply-filter').addEventListener('click', loadDashboardData);
             document.getElementById('refresh-btn').addEventListener('click', loadDashboardData);
             document.getElementById('export-csv-btn').addEventListener('click', exportCSV);
 
-            // Load data
             loadMerchantInfo();
             loadDashboardData();
-            loadTransactions();
         }
 
         async function loadMerchantInfo() {
@@ -622,65 +611,81 @@
         }
 
         async function loadDashboardData() {
-            const res = await fetch('/api/analytics/summary');
-            const summary = await res.json();
+            if (isLoading) return;
+            isLoading = true;
             
-            document.getElementById('total-revenue').textContent = `£${(summary.total_revenue || 0).toFixed(2)}`;
-            document.getElementById('total-transactions').textContent = summary.total_transactions || 0;
-            document.getElementById('avg-transaction').textContent = `£${(summary.avg_transaction || 0).toFixed(2)}`;
-            document.getElementById('failed-transactions').textContent = summary.failed_transactions || 0;
+            try {
+                const res = await fetch('/api/data?days=30');
+                const data = await res.json();
+                
+                const summary = data.summary || {};
+                document.getElementById('total-revenue').textContent = `£${(summary.total_revenue || 0).toFixed(2)}`;
+                document.getElementById('total-transactions').textContent = summary.total_transactions || 0;
+                document.getElementById('avg-transaction').textContent = `£${(summary.avg_transaction || 0).toFixed(2)}`;
+                document.getElementById('failed-transactions').textContent = summary.failed_transactions || 0;
 
-            // Daily chart
-            const dailyRes = await fetch('/api/analytics/daily?days=30');
-            const dailyData = await dailyRes.json();
-            
-            if (charts.daily) charts.daily.destroy();
-            const ctx1 = document.getElementById('daily-revenue-chart');
-            charts.daily = new Chart(ctx1, {
-                type: 'line',
-                data: {
-                    labels: dailyData.map(d => d.date),
-                    datasets: [{
-                        label: 'Revenue (£)',
-                        data: dailyData.map(d => d.revenue),
-                        borderColor: '#2563eb',
-                        backgroundColor: 'rgba(37, 99, 235, 0.1)',
-                        tension: 0.4,
-                        fill: true
-                    }]
-                },
-                options: {responsive: true, maintainAspectRatio: false}
-            });
+                // Daily Revenue Chart
+                const dailyData = data.daily || [];
+                if (dailyData.length > 0) {
+                    const trace = {
+                        x: dailyData.map(d => d.date),
+                        y: dailyData.map(d => d.revenue),
+                        type: 'scatter',
+                        mode: 'lines+markers',
+                        fill: 'tozeroy',
+                        line: {color: '#3b82f6', width: 2},
+                        marker: {color: '#3b82f6', size: 6}
+                    };
 
-            // Payment types
-            const paymentTypes = summary.payment_types || {};
-            if (charts.payment) charts.payment.destroy();
-            const ctx2 = document.getElementById('payment-types-chart');
-            charts.payment = new Chart(ctx2, {
-                type: 'doughnut',
-                data: {
-                    labels: Object.keys(paymentTypes),
-                    datasets: [{
-                        data: Object.values(paymentTypes),
-                        backgroundColor: ['#ef4444', '#f59e0b', '#10b981', '#3b82f6', '#8b5cf6']
-                    }]
-                },
-                options: {responsive: true, maintainAspectRatio: false}
-            });
+                    const layout = {
+                        margin: {l: 50, r: 20, t: 10, b: 40},
+                        xaxis: {title: ''},
+                        yaxis: {title: 'Revenue (£)'},
+                        height: 320
+                    };
+
+                    Plotly.newPlot('daily-revenue-chart', [trace], layout, {responsive: true});
+                }
+
+                // Payment Types Chart
+                const paymentTypes = summary.payment_types || {};
+                if (Object.keys(paymentTypes).length > 0) {
+                    const pieData = [{
+                        values: Object.values(paymentTypes),
+                        labels: Object.keys(paymentTypes),
+                        type: 'pie',
+                        marker: {
+                            colors: ['#ef4444', '#f59e0b', '#10b981', '#3b82f6', '#8b5cf6']
+                        }
+                    }];
+
+                    const layout = {
+                        margin: {l: 20, r: 20, t: 10, b: 20},
+                        height: 320
+                    };
+
+                    Plotly.newPlot('payment-types-chart', pieData, layout, {responsive: true});
+                }
+                
+                currentData.transactions = data.transactions || [];
+                loadTransactions();
+            } catch (error) {
+                console.error('Error:', error);
+            } finally {
+                isLoading = false;
+            }
         }
 
-        async function loadTransactions() {
-            const res = await fetch('/api/transactions?limit=100');
-            const data = await res.json();
+        function loadTransactions() {
             const tbody = document.getElementById('transactions-body');
             tbody.innerHTML = '';
 
-            if (!data.items || data.items.length === 0) {
+            if (!currentData.transactions || currentData.transactions.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="6">No transactions</td></tr>';
                 return;
             }
 
-            data.items.forEach(txn => {
+            currentData.transactions.forEach(txn => {
                 const date = new Date(txn.timestamp);
                 const row = tbody.insertRow();
                 row.innerHTML = `
@@ -695,29 +700,26 @@
         }
 
         function exportCSV() {
-            fetch('/api/transactions?limit=1000')
-                .then(r => r.json())
-                .then(data => {
-                    const csv = 'Date,Time,Amount,Status,Payment Type,Transaction ID\n' +
-                        data.items.map(txn => {
-                            const date = new Date(txn.timestamp);
-                            return [
-                                date.toLocaleDateString(),
-                                date.toLocaleTimeString(),
-                                txn.amount.toFixed(2),
-                                txn.status,
-                                txn.payment_type || 'N/A',
-                                txn.transaction_code
-                            ].map(e => `"${e}"`).join(',');
-                        }).join('\n');
-                    
-                    const blob = new Blob([csv], {type: 'text/csv'});
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = `transactions-${new Date().toISOString().split('T')[0]}.csv`;
-                    a.click();
-                });
+            const transactions = currentData.transactions || [];
+            const csv = 'Date,Time,Amount,Status,Payment Type,Transaction ID\n' +
+                transactions.map(txn => {
+                    const date = new Date(txn.timestamp);
+                    return [
+                        date.toLocaleDateString(),
+                        date.toLocaleTimeString(),
+                        txn.amount.toFixed(2),
+                        txn.status,
+                        txn.payment_type || 'N/A',
+                        txn.transaction_code
+                    ].map(e => `"${e}"`).join(',');
+                }).join('\n');
+            
+            const blob = new Blob([csv], {type: 'text/csv'});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `transactions-${new Date().toISOString().split('T')[0]}.csv`;
+            a.click();
         }
     </script>
 </body>
